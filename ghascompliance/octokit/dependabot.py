@@ -1,6 +1,5 @@
 import json
 import requests
-import gql
 from string import Template
 from ghascompliance.octokit.octokit import GitHub, OctoRequests, Octokit
 
@@ -197,15 +196,11 @@ class Dependencies(OctoRequests):
             }
 
             get_dependencies_query = GRAPHQL_DEPENDENCY_INFO
-            try:
-                dependencies_request = requests.post(
-                    "https://api.github.com/graphql",
-                    json={"query": get_dependencies_query, "variables": variables},
-                    headers=self.headers,
-                )
-            except gql.transport.exceptions.TransportQueryError as _:
-                print("All dependencies have not been retrieved")
-                return results
+            dependencies_request = requests.post(
+                "https://api.github.com/graphql",
+                json={"query": get_dependencies_query, "variables": variables},
+                headers=self.headers,
+            )
 
             if dependencies_request.status_code != 200:
                 raise Exception(
