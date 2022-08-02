@@ -1,5 +1,6 @@
 import json
 import requests
+import gql
 from string import Template
 from ghascompliance.octokit.octokit import GitHub, OctoRequests, Octokit
 
@@ -36,40 +37,61 @@ GRAPHQL_GET_INFO = """\
 # https://docs.github.com/en/graphql/reference/objects#repository
 # https://docs.github.com/en/graphql/reference/objects#dependencygraphdependency
 GRAPHQL_DEPENDENCY_INFO = """\
+query getRepoDeps($id: ID!, $first: Int!, $after: String) {
+  rateLimit {
+    limit
+    cost
+    remaining
+    resetAt
+  }
+  node(id: $id) {
+    ... on Repository {
+      name
+      isArchived
+      dependencyGraphManifests {
+        pageInfo {
+          endCursor
+        }
+        nodes {
+          id
+          exceedsMaxSize
+          filename
+          parseable
+          dependenciesCount
+          dependencies(first: $first, after: $after) {
+            pageInfo {
+              endCursor
+              hasNextPage
+            }
+            nodes {
+              packageName
+              packageManager
+              requirements
+              repository {
+                isArchived
+                isDisabled
+                isEmpty
+                isFork
+                isSecurityPolicyEnabled
+                isInOrganization
+                licenseInfo {
+                  name
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
+GRAPHQL_REPOSITORY_INFO = """\
 {
     repository(owner: "$owner", name: "$repo") {
         name
-        licenseInfo {
-            name
-        }
-        dependencyGraphManifests {
-            totalCount
-            edges {
-                node {
-                    filename
-                    dependencies {
-                        edges {
-                            node {
-                                packageName
-                                packageManager
-                                requirements
-                                repository {
-                                    isArchived
-                                    isDisabled
-                                    isEmpty
-                                    isFork
-                                    isSecurityPolicyEnabled
-                                    isInOrganization
-                                    licenseInfo {
-                                        name
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        id
     }
 }
 """
@@ -138,94 +160,136 @@ class Dependencies(OctoRequests):
 
         variables = {"owner": self.github.owner, "repo": self.github.repo}
 
-        query = Template(GRAPHQL_DEPENDENCY_INFO).substitute(**variables)
+        has_next_page = True
+        page_cursor = None
 
-        request = requests.post(
+        get_repo_info_query = Template(GRAPHQL_REPOSITORY_INFO).substitute(**variables)
+
+        repo_request = requests.post(
             "https://api.github.com/graphql",
-            json={"query": query},
+            json={"query": get_repo_info_query},
             headers=self.headers,
+            timeout=60,
         )
 
-        if request.status_code != 200:
+        if repo_request.status_code != 200:
             raise Exception(
-                "Query failed to run by returning code of {}. {}".format(
-                    request.status_code, query
+                "Repository query failed to run by returning code of {}. {}".format(
+                    repo_request.status_code, repo_request
                 )
             )
-        response = request.json()
-        if response.get("errors"):
-            Octokit.error(json.dumps(response, indent=2))
-            raise Exception("Query failed to run")
+
+        repo_response = repo_request.json()
+        if repo_response.get("errors"):
+            Octokit.error(json.dumps(repo_response, indent=2))
+            raise Exception("Repository query failed to run")
+
+        repository = repo_response.get("data", {}).get("repository", {})
+        repository_id: str = repository.get("id", {})
 
         results = []
+        while has_next_page:
 
-        repo = response.get("data", {}).get("repository", {})
-        # repo_name = repo.get('name')
-        # repo_license = repo.get('licenseInfo', {}).get('name')
+            variables = {
+                "id": repository_id,
+                "first": 100,
+                "after": page_cursor,
+            }
 
-        manifests = repo.get("dependencyGraphManifests", {}).get("edges", [])
-
-        for manifest in manifests:
-            manifest = manifest.get("node", {})
-            manifest_path = manifest.get("filename")
-
-            dependencies = manifest.get("dependencies", {}).get("edges", [])
-
-            for dependency in dependencies:
-                dependency = dependency.get("node", {})
-
-                dependency_manager = dependency.get("packageManager", "NA").lower()
-
-                dependency_name = dependency.get("packageName", "NA")
-                dependency_repo = dependency.get("repository", {})
-                dependency_requirement = (
-                    dependency.get("requirements", "")
-                    .replace("= ", "")
-                    .replace("^ ", "")
+            get_dependencies_query = GRAPHQL_DEPENDENCY_INFO
+            try:
+                dependencies_request = requests.post(
+                    "https://api.github.com/graphql",
+                    json={"query": get_dependencies_query, "variables": variables},
+                    headers=self.headers,
                 )
+            except gql.transport.exceptions.TransportQueryError as _:
+                print("All dependencies have not been retrieved")
+                return results
 
-                dependency_license = (
-                    dependency_repo.get("licenseInfo") if dependency_repo else {}
+            if dependencies_request.status_code != 200:
+                raise Exception(
+                    "Query failed to run by returning code of {}. {}".format(
+                        dependencies_request.status_code, get_dependencies_query
+                    )
                 )
+            dependencies_response = dependencies_request.json()
+            if dependencies_response.get("errors"):
+                Octokit.error(json.dumps(dependencies_response, indent=2))
+                raise Exception("Query failed to run")
 
-                dependency_license_name = (
-                    dependency_license.get("name", "NA") if dependency_license else "NA"
-                )
+            repository = dependencies_response.get("data", {}).get("node", {})
+            # repo_name = repo.get('name')
+            # repo_license = repo.get('licenseInfo', {}).get('name')
 
-                Octokit.debug(f" > {dependency_name} == {dependency_license_name}")
+            manifests = repository.get("dependencyGraphManifests", {}).get("nodes", [])
+            has_next_page = False
+            for manifest in manifests:
+                manifest_path = manifest.get("filename")
+                if manifest["dependencies"]["pageInfo"]["hasNextPage"]:
+                    page_cursor = (
+                        manifest.get("dependencies", {})
+                        .get("pageInfo", {})
+                        .get("endCursor", str)
+                    )
+                    has_next_page = True
 
-                dependency_maintenance = []
-                for dep_maintenance in [
-                    "isArchived",
-                    "isDisabled",
-                    "isEmpty",
-                    "isLocked",
-                ]:
-                    if dependency_repo and dependency_repo.get(dep_maintenance, False):
-                        dependency_maintenance.append(
-                            dep_maintenance.replace("is", "", 1).lower()
-                        )
+                dependencies = manifest.get("dependencies", {}).get("nodes", [])
+                for dependency in dependencies:
+                    dependency_manager = dependency.get("packageManager", "NA").lower()
+                    dependency_name = dependency.get("packageName", "NA")
+                    dependency_repo = dependency.get("repository", {})
+                    dependency_requirement = (
+                        dependency.get("requirements", "")
+                        .replace("= ", "")
+                        .replace("^ ", "")
+                    )
 
-                is_organization: bool = None
-                if dependency_repo:
-                    is_organization = dependency_repo.get("isInOrganization")
+                    dependency_license = (
+                        dependency_repo.get("licenseInfo") if dependency_repo else {}
+                    )
 
-                full_name = Dependencies.createDependencyName(
-                    dependency_manager, dependency_name, dependency_requirement
-                )
+                    dependency_license_name = (
+                        dependency_license.get("name", "NA")
+                        if dependency_license
+                        else "NA"
+                    )
 
-                results.append(
-                    {
-                        "name": dependency_name,
-                        "full_name": full_name,
-                        "manager": dependency_manager,
-                        "manager_path": manifest_path,
-                        "version": dependency_requirement,
-                        "license": dependency_license_name,
-                        "maintenance": dependency_maintenance,
-                        "organization": is_organization,
-                    }
-                )
+                    Octokit.debug(f" > {dependency_name} == {dependency_license_name}")
 
+                    dependency_maintenance = []
+                    for dep_maintenance in [
+                        "isArchived",
+                        "isDisabled",
+                        "isEmpty",
+                        "isLocked",
+                    ]:
+                        if dependency_repo and dependency_repo.get(
+                            dep_maintenance, False
+                        ):
+                            dependency_maintenance.append(
+                                dep_maintenance.replace("is", "", 1).lower()
+                            )
+
+                    is_organization: bool = None
+                    if dependency_repo:
+                        is_organization = dependency_repo.get("isInOrganization")
+
+                    full_name = Dependencies.createDependencyName(
+                        dependency_manager, dependency_name, dependency_requirement
+                    )
+
+                    results.append(
+                        {
+                            "name": dependency_name,
+                            "full_name": full_name,
+                            "manager": dependency_manager,
+                            "manager_path": manifest_path,
+                            "version": dependency_requirement,
+                            "license": dependency_license_name,
+                            "maintenance": dependency_maintenance,
+                            "organization": is_organization,
+                        }
+                    )
         self.dependencies = results
         return results
