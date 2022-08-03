@@ -36,13 +36,7 @@ GRAPHQL_GET_INFO = """\
 # https://docs.github.com/en/graphql/reference/objects#repository
 # https://docs.github.com/en/graphql/reference/objects#dependencygraphdependency
 GRAPHQL_DEPENDENCY_INFO = """\
-query getRepoDeps($id: ID!, $first: Int!, $after: String) {
-  rateLimit {
-    limit
-    cost
-    remaining
-    resetAt
-  }
+query getRepoDeps($id: ID!, $after: String) {
   node(id: $id) {
     ... on Repository {
       name
@@ -57,7 +51,7 @@ query getRepoDeps($id: ID!, $first: Int!, $after: String) {
           filename
           parseable
           dependenciesCount
-          dependencies(first: $first, after: $after) {
+          dependencies(first: 100, after: $after) {
             pageInfo {
               endCursor
               hasNextPage
@@ -191,7 +185,6 @@ class Dependencies(OctoRequests):
 
             variables = {
                 "id": repository_id,
-                "first": 100,
                 "after": page_cursor,
             }
 
