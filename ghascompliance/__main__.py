@@ -30,7 +30,7 @@ parser.add_argument("--disable-code-scanning", action="store_true")
 parser.add_argument("--disable-dependabot", action="store_true")
 parser.add_argument("--disable-dependency-licensing", action="store_true")
 parser.add_argument("--disable-dependencies", action="store_true")
-parser.add_argument("--disable-secret-scanning", action="store_true")   
+parser.add_argument("--disable-secret-scanning", action="store_true")
 parser.add_argument("--is-github-app-token", action="store_true", default=False)
 
 github_arguments = parser.add_argument_group("GitHub")
