@@ -110,7 +110,6 @@ class Policy:
         with open(path, "r") as handle:
             policy = yaml.safe_load(handle)
 
-        print(policy)
         self.loadPolicy(policy)
 
     def loadPolicy(self, policy: dict):
