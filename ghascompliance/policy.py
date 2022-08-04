@@ -425,7 +425,7 @@ class Policy:
             ign.lower() for ign in policy.get("ignores", {}).get("names", [])
         ]
 
-        #  if the license name is in the warnings list generate a warning
+        #  if the license name is in the ignores list, ignore a warning
         if self.matchContent(license, ignores_ids) or self.matchContent(
             dependency_full, ignores_names
         ):
