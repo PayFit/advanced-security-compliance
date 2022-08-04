@@ -164,8 +164,6 @@ class Policy:
 
             # Validate blocks
             for block in list(section_data):
-                print(section)
-                print(block)
                 if block not in Policy.__BLOCK_ITEMS__:
                     raise Exception(
                         __SCHEMA_VALIDATION__.format(
