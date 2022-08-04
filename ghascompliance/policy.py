@@ -47,7 +47,6 @@ class Policy:
 
         self.temp_repo = None
 
-
         if repository and repository != "":
             self.loadFromRepo()
         elif path and path != "":
@@ -59,7 +58,15 @@ class Policy:
             if not self.isGithubAppToken:
                 repo = "https://" + self.token + "@" + instance + "/" + self.repository
             else:
-                repo = "https://" + "x-access-token:" + self.token + "@" + instance + "/" + self.repository
+                repo = (
+                    "https://"
+                    + "x-access-token:"
+                    + self.token
+                    + "@"
+                    + instance
+                    + "/"
+                    + self.repository
+                )
         else:
             repo = "https://" + instance + "/" + self.repository
 
@@ -103,6 +110,7 @@ class Policy:
         with open(path, "r") as handle:
             policy = yaml.safe_load(handle)
 
+        print(policy)
         self.loadPolicy(policy)
 
     def loadPolicy(self, policy: dict):
@@ -135,6 +143,7 @@ class Policy:
         time_to_remediate_policy = False
 
         for section, section_data in data.items():
+
             # check if only certain sections are present
             if section not in Policy.__SECTION_ITEMS__:
                 raise Exception(
@@ -155,6 +164,8 @@ class Policy:
 
             # Validate blocks
             for block in list(section_data):
+                print(section)
+                print(block)
                 if block not in Policy.__BLOCK_ITEMS__:
                     raise Exception(
                         __SCHEMA_VALIDATION__.format(
@@ -411,6 +422,18 @@ class Policy:
         )
         dependency_full = dependency.get("full_name", "NA://NA#NA")
 
+        # gather ignores ids and names
+        ignores_ids = [wrn.lower() for wrn in policy.get("ignores", {}).get("ids", [])]
+        ignores_names = [
+            ign.lower() for ign in policy.get("ignores", {}).get("names", [])
+        ]
+
+        #  if the license name is in the warnings list generate a warning
+        if self.matchContent(license, ignores_ids) or self.matchContent(
+            dependency_full, ignores_names
+        ):
+            return False
+
         # gather warning ids and names
         warning_ids = [wrn.lower() for wrn in policy.get("warnings", {}).get("ids", [])]
         warning_names = [
@@ -439,7 +462,7 @@ class Policy:
             ign.lower() for ign in policy.get("conditions", {}).get("names", [])
         ]
 
-        for value in [license, dependency_full, dependency_name, dependency_short_name]:
+        for value in [dependency_full, dependency_name, dependency_short_name, license]:
 
             # return false (ignore) if name or id is defined in the ignore portion of the policy
             if self.matchContent(value, ingore_ids) or self.matchContent(
